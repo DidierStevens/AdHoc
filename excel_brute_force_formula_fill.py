@@ -4,8 +4,8 @@ from __future__ import print_function
 
 __description__ = 'Excel brute force formula fill'
 __author__ = 'Didier Stevens'
-__version__ = '0.0.1'
-__date__ = '2020/05/18'
+__version__ = '0.0.2'
+__date__ = '2020/05/20'
 
 """
 
@@ -18,6 +18,7 @@ History:
   2020/05/16: continue
   2020/05/17: continue
   2020/05/18: continue
+  2020/05/20: continue sample 565462bf06374d8daf51f99510339945
 
 Todo:
 """
@@ -50,7 +51,7 @@ DEFAULT_SEPARATOR = ','
 QUOTE = '"'
 CELLREFERENCE_LN = r'([A-Z]+[0-9]+)'
 CELLREFERENCE_RC = r'(R[0-9]+C[0-9]+)'
-CELLREFERENCE = CELLREFERENCE_LN
+CELLREFERENCE = None
 
 def PrintError(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -620,7 +621,20 @@ def BruteForceGetCell(formula):
     if oMatch == None:
         return []
     result = []
-    for i in range(256):
+    dBruteForceRanges = {
+        '8': [1, 7], # Number indicating the cell's horizontal alignment
+        '17': [0, 255], # Row height of cell, in points.
+        '19': [0, 255], # Size of font, in points.
+        '24': [0, 56], # Font color of the first character in the cell, as a number in the range 1 to 56. If font color is automatic, returns 0.
+        '38': [0, 56], # Shade foreground color as a number in the range 1 to 56. If color is automatic, returns 0.
+        '50': [1, 4], # Number indicating the cell's vertical alignment
+    }
+    defaultBruteForceRange = [0, 255]
+    if not oMatch.groups()[2] in dBruteForceRanges:
+        print(formula)
+        print(oMatch.groups()[2])
+    begin, end = dBruteForceRanges.get(oMatch.groups()[2], defaultBruteForceRange)
+    for i in range(begin, end + 1):
         try:
             formula = oMatch.groups()[0] + str(i) + oMatch.groups()[6]
             value = eval(IntToFloatString(formula))
@@ -630,6 +644,7 @@ def BruteForceGetCell(formula):
     return result
 
 def MyChr(value):
+    value = int(value)
     if value < 0 or value > 255:
         value = 0x20
     return chr(value)
@@ -642,14 +657,10 @@ def SolveFormula(values, position, expected, dCells):
         values = []
         for bruteforcevalue in dCells.get(leftCell)[2]:
             result = None
-            if operator == '+':
-                result = MyChr(int(eval(bruteforcevalue) + eval(dCells[rightCell][2])))
-            elif operator == '-':
-                result = MyChr(int(eval(bruteforcevalue) - eval(dCells[rightCell][2])))
-            elif operator == '*':
-                result = MyChr(int(eval(bruteforcevalue) * eval(dCells[rightCell][2])))
-            elif operator == '/':
-                result = MyChr(int(eval(bruteforcevalue) / eval(dCells[rightCell][2])))
+            if operator in ['+', '-', '*', '/']:
+                result = MyChr(eval(bruteforcevalue + operator + dCells[rightCell][2]))
+            else:
+                raise Exception('Unknown operator: ' + operator)
             if result == expected:
                 values.append(bruteforcevalue)
         if values != []:
@@ -661,24 +672,51 @@ def SolveFormula(values, position, expected, dCells):
             dCells[leftCell] = stored
 
 def PartialMatch(value, expected):
+    matches = 0
     if len(value) != len(expected):
-        return False
+        return 0
     for i in range(len(value)):
         if value[i] == expected[i]:
+            if expected[i] != ' ':
+                matches += 1
             continue
         if value[i] != ' ':
-            return False
-    return True
+            return 0
+    return matches
 
 def SolveForExpected(dFormulas, expected, dCells):
     for key, values in dFormulas.items():
-        if PartialMatch(values[1], expected):
+        if PartialMatch(values[1], expected) != 0:
             for i, c in enumerate(values[1]):
                 if c == ' ' and expected[i] != ' ':
                     SolveFormula(values, i, expected[i], dCells)
 
+def StartsWithAndEndsWith(string, start, end):
+    if not string.startswith(start):
+        return None
+    string = string[len(start):]
+    if not string.endswith(end):
+        return None
+    return string[:-len(end)]
+
+def TryFormulas(dFormulas, dCells):
+    for key, values in dFormulas.items():
+        result = ''
+        for leftCell, operator, rightCell in values[0]:
+            if leftCell in dCells and rightCell in dCells:
+                if type(dCells[leftCell][2]) == type([]):
+                    result += ' '
+                elif operator in ['+', '-', '*', '/']:
+                    result += MyChr(eval(dCells[leftCell][2] + operator + dCells[rightCell][2]))
+                else:
+                    raise Exception('TryFormulas 1')
+            else:
+                result += ' '
+        dFormulas[key] = [values[0], result]
+
 def ProcessTextFile(filename, oBeginGrep, oGrep, oEndGrep, context, oOutput, oLogfile, options):
     global dCells
+    global CELLREFERENCE
 
     with TextFile(filename, oLogfile) as fIn:
         try:
@@ -686,6 +724,7 @@ def ProcessTextFile(filename, oBeginGrep, oGrep, oEndGrep, context, oOutput, oLo
             reader = csv.reader(fIn, delimiter=',', skipinitialspace=False, quoting=csv.QUOTE_MINIMAL)
             skipHeader = True
             index = 0
+            CELLREFERENCE = None
             for row in reader:
                 if skipHeader:
                     skipHeader = False
@@ -695,12 +734,19 @@ def ProcessTextFile(filename, oBeginGrep, oGrep, oEndGrep, context, oOutput, oLo
                 rowCut = row[index:]
                 dCells[rowCut[0]] = rowCut
                 if len(rowCut) != 3:
-                    print(row)
-                    raise
+                    raise Exception('Error row length: ' + repr(row))
+                if CELLREFERENCE == None:
+                    if re.match(CELLREFERENCE_RC, rowCut[0]):
+                        CELLREFERENCE = CELLREFERENCE_RC
+                    elif re.match(CELLREFERENCE_LN, rowCut[0]):
+                        CELLREFERENCE = CELLREFERENCE_LN
+                    else:
+                        raise Exception('Error reference: ' + row[0])
 
             for key, row in dCells.items():
-                if row[1].startswith('SET.VALUE('):
-                    cell, formula = row[1][10:-1].split(',', 1)
+                match = StartsWithAndEndsWith(row[1], 'SET.VALUE(', ')')
+                if match != None:
+                    cell, formula = match.split(',', 1)
                     bruteforce = BruteForceGetCell(formula)
                     if bruteforce == []:
                         try:
@@ -712,82 +758,53 @@ def ProcessTextFile(filename, oBeginGrep, oGrep, oEndGrep, context, oOutput, oLo
                     else:
                         dCells[cell] = [cell, '', bruteforce]
 
-            oRE = re.compile(r'CHAR\(' + CELLREFERENCE + r'(.)' + CELLREFERENCE + r'\)')
+            oRE = re.compile(r'^CHAR\(' + CELLREFERENCE + r'(.)' + CELLREFERENCE + r'\)$')
 
             dFormulas = {}
             for key, row in dCells.items():
-                if row[1].startswith('FORMULA.FILL('):
+                matchFormula = StartsWithAndEndsWith(row[1], 'FORMULA(', ')')
+                if matchFormula == None:
+                    matchFormula = StartsWithAndEndsWith(row[1], 'FORMULA.FILL(', ')')
+                if matchFormula != None:
                     chars = []
-                    for char in row[1][13:].split(',')[0].split('&'):
+                    for char in matchFormula.split(',')[0].split('&'):
                         oMatch = oRE.search(char)
                         if oMatch != None:
                             chars.append(oMatch.groups())
+                        else:
+                            raise Exception('1')
                     dFormulas[row[1]] = [chars, None]
+
+#            dFormulas = {key: value for key, value in dFormulas.items() if len(value[0]) == 15}
+#            print(dFormulas)
 
             for key, values in dFormulas.items():
                 SolveFormula(values, 0, '=', dCells)
+            TryFormulas(dFormulas, dCells)
 
-            for key, values in dFormulas.items():
-                result = ''
-                for leftCell, operator, rightCell in values[0]:
-                    if leftCell in dCells and rightCell in dCells:
-                        if type(dCells[leftCell][2]) == type([]):
-                            result += ' '
-                        elif operator == '+':
-                            result += MyChr(int(eval(dCells[leftCell][2]) + eval(dCells[rightCell][2])))
-                        elif operator == '-':
-                            result += MyChr(int(eval(dCells[leftCell][2]) - eval(dCells[rightCell][2])))
-                        elif operator == '*':
-                            result += MyChr(int(eval(dCells[leftCell][2]) * eval(dCells[rightCell][2])))
-                        elif operator == '/':
-                            result += MyChr(int(eval(dCells[leftCell][2]) / eval(dCells[rightCell][2])))
-                    else:
-                        result += ' '
-                dFormulas[key] = [values[0], result]
+            wellknowns = [
+                '=APP.MAXIMIZE()',
+                '=CLOSE(FALSE)',
+                '=NEXT()',
+                '''="The workbook cannot be opened or repaired by Microsoft Excel because it's corrupt."''',
+                '="https://docs.microsoft.com/en-us/officeupdates/office-msi-non-security-updates"',
+                '="C:\\Windows\\system32\\reg.exe"',
+                '=WAIT(NOW()+"00:00:01")',
+                '="C:\\Windows\\system32\\rundll32.exe"',
+                '="EXPORT HKCU\\Software\\Microsoft\\Office\\"',
+            ]
+            for wellknown in wellknowns:
+                SolveForExpected(dFormulas, wellknown, dCells)
+            TryFormulas(dFormulas, dCells)
 
             if options.expected != '':
                 for expected in File2Strings(options.expected):
                     SolveForExpected(dFormulas, expected, dCells)
+                TryFormulas(dFormulas, dCells)
 
-            for key, values in dFormulas.items():
-                result = ''
-                for leftCell, operator, rightCell in values[0]:
-                    if leftCell in dCells and rightCell in dCells:
-                        if type(dCells[leftCell][2]) == type([]):
-                            result += ' '
-                        elif operator == '+':
-                            result += MyChr(int(eval(dCells[leftCell][2]) + eval(dCells[rightCell][2])))
-                        elif operator == '-':
-                            result += MyChr(int(eval(dCells[leftCell][2]) - eval(dCells[rightCell][2])))
-                        elif operator == '*':
-                            result += MyChr(int(eval(dCells[leftCell][2]) * eval(dCells[rightCell][2])))
-                        elif operator == '/':
-                            result += MyChr(int(eval(dCells[leftCell][2]) / eval(dCells[rightCell][2])))
-                    else:
-                        result += ' '
-                dFormulas[key] = [values[0], result]
+            for key, row in dFormulas.items():
+                oOutput.Line(row[1])
 
-            for key, row in dCells.items():
-                if row[1].startswith('FORMULA.FILL('):
-                    result = ''
-                    for char in row[1][13:].split(',')[0].split('&'):
-                        oMatch = oRE.search(char)
-                        if oMatch != None:
-                            if oMatch.groups()[0] in dCells and oMatch.groups()[2] in dCells:
-#                                oOutput.Line(oMatch.groups())
-                                if type(dCells[oMatch.groups()[0]][2]) == type([]):
-                                    result += ' '
-                                elif oMatch.groups()[1] == '+':
-                                    result += MyChr(int(eval(dCells[oMatch.groups()[0]][2]) + eval(dCells[oMatch.groups()[2]][2])))
-                                elif oMatch.groups()[1] == '-':
-                                    result += MyChr(int(eval(dCells[oMatch.groups()[0]][2]) - eval(dCells[oMatch.groups()[2]][2])))
-                                elif oMatch.groups()[1] == '*':
-                                    result += MyChr(int(eval(dCells[oMatch.groups()[0]][2]) * eval(dCells[oMatch.groups()[2]][2])))
-                                elif oMatch.groups()[1] == '/':
-                                    result += MyChr(int(eval(dCells[oMatch.groups()[0]][2]) / eval(dCells[oMatch.groups()[2]][2])))
-                            else:
-                                result += ' '
-                    oOutput.Line(result)
         except:
             oLogfile.LineError('Processing file %s %s' % (filename, repr(sys.exc_info()[1])))
             if not options.ignoreprocessingerrors:
