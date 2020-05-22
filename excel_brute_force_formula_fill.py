@@ -5,7 +5,7 @@ from __future__ import print_function
 __description__ = 'Excel brute force formula fill'
 __author__ = 'Didier Stevens'
 __version__ = '0.0.2'
-__date__ = '2020/05/20'
+__date__ = '2020/05/22'
 
 """
 
@@ -19,6 +19,7 @@ History:
   2020/05/17: continue
   2020/05/18: continue
   2020/05/20: continue sample 565462bf06374d8daf51f99510339945
+  2020/05/22: MyEval
 
 Todo:
 """
@@ -35,6 +36,8 @@ import re
 import fnmatch
 import collections
 import csv
+import math
+import string
 from contextlib import contextmanager
 
 def PrintManual():
@@ -69,6 +72,12 @@ def C2IIP2(data):
         return data
     else:
         return ord(data)
+
+def P23Ord(value):
+    if type(value) == int:
+        return value
+    else:
+        return ord(value)
 
 def File2Strings(filename):
     try:
@@ -616,6 +625,48 @@ def IntToFloatStringCallback(oMatch):
 def IntToFloatString(formula):
     return re.sub(r'[0-9.]+', IntToFloatStringCallback, formula)
 
+def CalculatePrevalence(data):
+    dPrevalence = {iter: 0 for iter in range(0x100)}
+    for char in data:
+        dPrevalence[P23Ord(char)] += 1
+    return dPrevalence
+
+def CalculateByteStatistics(dPrevalence):
+    sumValues = sum(dPrevalence.values())
+    countNullByte = dPrevalence[0]
+    countControlBytes = 0
+    countWhitespaceBytes = 0
+    for iter in range(1, 0x21):
+        if chr(iter) in string.whitespace:
+            countWhitespaceBytes += dPrevalence[iter]
+        else:
+            countControlBytes += dPrevalence[iter]
+    countControlBytes += dPrevalence[0x7F]
+    countPrintableBytes = 0
+    for iter in range(0x21, 0x7F):
+        countPrintableBytes += dPrevalence[iter]
+    countHighBytes = 0
+    for iter in range(0x80, 0x100):
+        countHighBytes += dPrevalence[iter]
+    entropy = 0.0
+    for iter in range(0x100):
+        if dPrevalence[iter] > 0:
+            prevalence = float(dPrevalence[iter]) / float(sumValues)
+            entropy += - prevalence * math.log(prevalence, 2)
+    countLetters = 0
+    for iter in range(0x41, 0x5B):
+        countLetters += dPrevalence[iter]
+    for iter in range(0x61, 0x7B):
+        countLetters += dPrevalence[iter]
+    return sumValues, entropy, countNullByte, countControlBytes, countWhitespaceBytes, countPrintableBytes, countHighBytes, countLetters
+
+def MyEval(expression):
+    sumValues, entropy, countNullByte, countControlBytes, countWhitespaceBytes, countPrintableBytes, countHighBytes, countLetters = CalculateByteStatistics(CalculatePrevalence(expression))
+    if countLetters > 0:
+        raise('MyEval: expression with letters: ' + expression)
+    else:
+        return eval(expression)
+
 def BruteForceGetCell(formula):
     oMatch = re.search(r'^(.*)(GET.CELL\s*\(\s*)([0-9]+)(\s*,\s*)' + CELLREFERENCE + r'(\s*\))(.*)$', formula)
     if oMatch == None:
@@ -637,7 +688,7 @@ def BruteForceGetCell(formula):
     for i in range(begin, end + 1):
         try:
             formula = oMatch.groups()[0] + str(i) + oMatch.groups()[6]
-            value = eval(IntToFloatString(formula))
+            value = MyEval(IntToFloatString(formula))
             result.append(str(value))
         except:
             pass
@@ -658,7 +709,7 @@ def SolveFormula(values, position, expected, dCells):
         for bruteforcevalue in dCells.get(leftCell)[2]:
             result = None
             if operator in ['+', '-', '*', '/']:
-                result = MyChr(eval(bruteforcevalue + operator + dCells[rightCell][2]))
+                result = MyChr(MyEval(bruteforcevalue + operator + dCells[rightCell][2]))
             else:
                 raise Exception('Unknown operator: ' + operator)
             if result == expected:
@@ -707,7 +758,7 @@ def TryFormulas(dFormulas, dCells):
                 if type(dCells[leftCell][2]) == type([]):
                     result += ' '
                 elif operator in ['+', '-', '*', '/']:
-                    result += MyChr(eval(dCells[leftCell][2] + operator + dCells[rightCell][2]))
+                    result += MyChr(MyEval(dCells[leftCell][2] + operator + dCells[rightCell][2]))
                 else:
                     raise Exception('TryFormulas 1')
             else:
@@ -751,7 +802,7 @@ def ProcessTextFile(filename, oBeginGrep, oGrep, oEndGrep, context, oOutput, oLo
                     if bruteforce == []:
                         try:
                             expression = IntToFloatString(formula)
-                            value = eval(expression)
+                            value = MyEval(expression)
                             dCells[cell] = [cell, '', str(value)]
                         except:
                             print(row)
